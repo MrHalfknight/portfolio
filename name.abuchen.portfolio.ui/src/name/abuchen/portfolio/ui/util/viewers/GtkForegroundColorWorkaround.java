@@ -32,12 +32,16 @@ import org.eclipse.swt.widgets.TreeItem;
 {
     private static final String ELLIPSIS = "…"; //$NON-NLS-1$
 
-    /** horizontal padding used for the text area of a cell */
+    /**
+     * horizontal gap between right/center aligned text and the cell edge; only
+     * used for positioning, never to decide whether the text has to be
+     * shortened
+     */
     private static final int PADDING = 4;
 
     /** the parts of a table or tree cell needed for painting */
-    private record CellData(String text, Image image, Rectangle imageBounds, Rectangle textBounds, Font font,
-                    int alignment)
+    private record CellData(String text, Image image, Rectangle bounds, Rectangle imageBounds, Rectangle textBounds,
+                    Font font, int alignment)
     {
     }
 
@@ -94,7 +98,7 @@ import org.eclipse.swt.widgets.TreeItem;
         {
             var style = item.getParent().getColumn(event.index).getStyle();
             return new CellData(item.getText(event.index), item.getImage(event.index),
-                            item.getImageBounds(event.index), item.getTextBounds(event.index),
+                            item.getBounds(event.index), item.getImageBounds(event.index), item.getTextBounds(event.index),
                             item.getFont(event.index), style & (SWT.LEFT | SWT.CENTER | SWT.RIGHT));
         }
 
@@ -102,7 +106,7 @@ import org.eclipse.swt.widgets.TreeItem;
         {
             var style = item.getParent().getColumn(event.index).getStyle();
             return new CellData(item.getText(event.index), item.getImage(event.index),
-                            item.getImageBounds(event.index), item.getTextBounds(event.index),
+                            item.getBounds(event.index), item.getImageBounds(event.index), item.getTextBounds(event.index),
                             item.getFont(event.index), style & (SWT.LEFT | SWT.CENTER | SWT.RIGHT));
         }
 
@@ -144,46 +148,37 @@ import org.eclipse.swt.widgets.TreeItem;
             var isSelected = (event.detail & SWT.SELECTED) != 0;
             gc.setForeground(isSelected ? event.display.getSystemColor(SWT.COLOR_LIST_SELECTION_TEXT) : foreground);
 
-            // text area: right of the image (if any) up to the cell edge
-            int left = hasImage ? cell.imageBounds().x + cell.imageBounds().width : event.x;
-            int right = event.x + event.width;
+            // text area: right of the image (if any) up to the cell edge; use
+            // the item's cell bounds instead of the event rectangle because
+            // the event may only cover the renderer of the text
+            var bounds = cell.bounds().isEmpty() ? new Rectangle(event.x, event.y, event.width, event.height)
+                            : cell.bounds();
+            int left = hasImage ? cell.imageBounds().x + cell.imageBounds().width : bounds.x;
+            int right = bounds.x + bounds.width;
 
             var isRight = (cell.alignment() & SWT.RIGHT) != 0;
             var isCenter = !isRight && (cell.alignment() & SWT.CENTER) != 0;
 
-            // Determine the text area first, then shorten to fit exactly that
-            // area. Do not trust getTextBounds() for right/center aligned
-            // columns, as it is unclear whether GTK reports the text extent
-            // or the whole renderer area.
-            int start;
-            int available;
-            if (isRight)
-            {
-                start = left;
-                available = right - start - PADDING;
-            }
-            else if (isCenter)
-            {
-                start = left + PADDING / 2;
-                available = right - start - PADDING / 2;
-            }
-            else
-            {
-                start = !cell.textBounds().isEmpty() ? cell.textBounds().x : left;
-                available = right - start - PADDING;
-            }
-            available = Math.max(0, available);
+            // Do not trust getTextBounds() for right/center aligned columns,
+            // as it is unclear whether GTK reports the text extent or the
+            // whole renderer area.
+            int start = left;
+            if (!isRight && !isCenter && !cell.textBounds().isEmpty())
+                start = cell.textBounds().x;
 
-            text = shorten(gc, text, available);
+            // shorten only if the text really overflows the cell (no padding
+            // here, otherwise text that just fits is cut off)
+            text = shorten(gc, text, Math.max(0, right - start));
             var extent = gc.textExtent(text);
 
             int x;
             if (isRight)
-                x = start + Math.max(0, available - extent.x);
+                x = right - PADDING - extent.x;
             else if (isCenter)
-                x = start + Math.max(0, (available - extent.x) / 2);
+                x = start + (right - start - extent.x) / 2;
             else
                 x = start;
+            x = Math.max(start, x);
 
             var y = event.y + Math.max(0, (event.height - extent.y) / 2);
             gc.drawText(text, x, y, true);
